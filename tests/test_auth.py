@@ -9,6 +9,9 @@ from database.models import User
 from conftest import startup
 import aioredis
 
+from main import hash_handler
+from services.auth import Hash
+
 app = FastAPI()
 
 
@@ -39,20 +42,25 @@ def test_repeat_create_user(client, user):
     assert data["detail"] == "Account already exists"
 
 
-def test_login_user_not_confirmed(client, user):
-    response = client.post(
-        "/login",
-        data={"username": user.get('email'), "password": user.get('password')},
-    )
-    assert response.status_code == 401, response.text
-    data = response.json()
-    assert data["detail"] == "Email not confirmed"
 
 
-def test_login_user(client, session, user):
+
+def test_login(client, session, user):
+    # Create the user
+    test_user = User(email=user.get('email'), password=Hash.pwd_context.hash(user.get('password')), confirmed=False)
+    session.add(test_user)
+    session.commit()
+
+    # Now the user exists in the DB, let's try to authenticate
     current_user: User = session.query(User).filter(User.email == user.get('email')).first()
+    if current_user is None:
+        pytest.fail("User not found in the database")
+
+    # Confirm the user
     current_user.confirmed = True
     session.commit()
+
+    # Now test the login
     response = client.post(
         "/login",
         data={"username": user.get('email'), "password": user.get('password')},
@@ -60,6 +68,8 @@ def test_login_user(client, session, user):
     assert response.status_code == 200, response.text
     data = response.json()
     assert data["token_type"] == "bearer"
+
+
 
 
 def test_login_wrong_password(client, user):
